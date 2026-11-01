@@ -19,14 +19,14 @@ DaisySeed hw;
 
 const int SAMPLE_SIZE = 65536;
 static float buffer[SAMPLE_SIZE];
-static volatile int  sample_count    = 0;
-static volatile bool done            = false;
-static volatile int  callback_count  = 0; // diagnostic: increments every callback
+static volatile int sample_count = 0;
+static volatile bool done = false;
+static volatile int callback_count = 0; // diagnostic: increments every callback
 
 // DC blocking filter
 static float prev_x = 0.0f;
 static float prev_y = 0.0f;
-const  float R = 0.9999f;
+const float R = 0.9999f;
 
 inline float RemoveDC(float x) {
   float y = x - prev_x + R * prev_y;
@@ -37,17 +37,23 @@ inline float RemoveDC(float x) {
 
 static const size_t BLOCK_SIZE = 256;
 
+// DMA buffer is a buffer stored in memory that the DMA (directly memory
+// controller) accesses and puts data in when it does a function for you. this
+// is the receive and transmit buffers for those
+
 // DMA buffers must live in non-cached D2 SRAM (.sram1_bss).
-static int32_t DMA_BUFFER_MEM_SECTION dma_rx[BLOCK_SIZE * 2]; // stereo interleaved: L, R, L, R...
+static int32_t DMA_BUFFER_MEM_SECTION
+    dma_rx[BLOCK_SIZE * 2]; // stereo interleaved: L, R, L, R...
 static int32_t DMA_BUFFER_MEM_SECTION dma_tx[BLOCK_SIZE * 2];
 
 // Callback signature must match: void(int32_t* rx, int32_t* tx, size_t size)
-void SAI2_Callback(int32_t* rx, int32_t* tx, size_t size) {
+void SAI2_Callback(int32_t *rx, int32_t *tx, size_t size) {
   callback_count++;
-  if(done) return;
+  if (done)
+    return;
 
-  for(size_t i = 0; i < size / 2; i++) { // /2 because stereo interleaved
-    if(sample_count >= SAMPLE_SIZE) {
+  for (size_t i = 0; i < size / 2; i++) { // /2 because stereo interleaved
+    if (sample_count >= SAMPLE_SIZE) {
       done = true;
       return;
     }
@@ -71,51 +77,63 @@ int main() {
   SaiHandle::Config sai_cfg;
   sai_cfg.periph = SaiHandle::Config::Peripheral::SAI_2;
   sai_cfg.sr = SaiHandle::Config::SampleRate::SAI_48KHZ;
-  sai_cfg.bit_depth = SaiHandle::Config::BitDepth::SAI_32BIT; // SAI_24BIT uses MSB-justified; SPH0645 needs standard I2S
+  sai_cfg.bit_depth =
+      SaiHandle::Config::BitDepth::SAI_32BIT; // SAI_24BIT uses MSB-justified;
+                                              // SPH0645 needs standard I2S
   // All active pins (PA0=SD_B, PA1=MCLK_B, PA2=SCK_B, PG9=FS_B) are Block_B.
   // Block_B must be MASTER so it drives BCLK and LRCL as outputs.
-  // Block_A is a dummy slave (required by libDaisy API; SA pin not connected to anything).
+  // Block_A is a dummy slave (required by libDaisy API; SA pin not connected to
+  // anything).
   sai_cfg.a_sync = SaiHandle::Config::Sync::SLAVE;
   sai_cfg.b_sync = SaiHandle::Config::Sync::MASTER;
   sai_cfg.a_dir = SaiHandle::Config::Direction::TRANSMIT;
   sai_cfg.b_dir = SaiHandle::Config::Direction::RECEIVE;
 
-  sai_cfg.pin_config.mclk = {DSY_GPIOA, 1};  // Pin 31
-  sai_cfg.pin_config.sb = {DSY_GPIOA, 0};  // Pin 32 - mic DOUT
-  sai_cfg.pin_config.sa = {DSY_GPIOD, 11}; // Pin 33 - dummy TX
-  sai_cfg.pin_config.fs = {DSY_GPIOG, 9};  // Pin 34
+  sai_cfg.pin_config.mclk = {DSY_GPIOA, 1}; // Pin 31
+  sai_cfg.pin_config.sb = {DSY_GPIOA, 0};   // Pin 32 - mic DOUT
+  sai_cfg.pin_config.sa = {DSY_GPIOD, 11};  // Pin 33 - dummy TX
+  sai_cfg.pin_config.fs = {DSY_GPIOG, 9};   // Pin 34
   sai_cfg.pin_config.sck = {DSY_GPIOA, 2};  // Pin 35
 
+  // past this isnt really gonna be useful
   SaiHandle::Result init_result = sai2.Init(sai_cfg);
-  if(init_result != SaiHandle::Result::OK) {
+  if (init_result != SaiHandle::Result::OK) {
     hw.PrintLine("ERROR: SAI init failed");
-    while(1) {}
+    while (1) {
+    }
   }
 
-  SaiHandle::Result dma_result = sai2.StartDma(dma_rx, dma_tx, BLOCK_SIZE * 2, SAI2_Callback);
-  if(dma_result != SaiHandle::Result::OK) {
+  SaiHandle::Result dma_result =
+      sai2.StartDma(dma_rx, dma_tx, BLOCK_SIZE * 2, SAI2_Callback);
+  if (dma_result != SaiHandle::Result::OK) {
     hw.PrintLine("ERROR: StartDma failed");
-    while(1) {}
+    while (1) { // what a way to end your program!
+    }
   }
 
   hw.PrintLine("SAI OK - waiting for capture...");
 
   // Timeout loop: report callback count every second for 5 seconds
-  for(int t = 0; t < 5; t++) {
+  for (int t = 0; t < 5; t++) {
     System::Delay(1000);
-    hw.PrintLine("t=%d callbacks=%d samples=%d", t, callback_count, sample_count);
-    if(done) break;
+    hw.PrintLine("t=%d callbacks=%d samples=%d", t, callback_count,
+                 sample_count);
+    if (done)
+      break;
   }
 
-  if(!done) {
-    hw.PrintLine("ERROR: capture timed out - callback_count=%d", callback_count);
-    while(1) {}
+  if (!done) {
+    hw.PrintLine("ERROR: capture timed out - callback_count=%d",
+                 callback_count);
+    while (1) {
+    }
   }
 
   hw.PrintLine("BEGIN");
-  for(int i = 0; i < SAMPLE_SIZE; i++) {
+  for (int i = 0; i < SAMPLE_SIZE; i++) {
     hw.PrintLine("%ld", (long)(buffer[i] * 1000000.0f));
   }
   hw.PrintLine("END");
-  while(1) {}
+  while (1) {
+  }
 }

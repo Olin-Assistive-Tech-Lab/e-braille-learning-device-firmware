@@ -37,37 +37,45 @@ inline float RemoveDC(float x) {
 static const size_t BLOCK_SIZE = 256;
 
 // DMA buffers live in non-cached D2 SRAM (.sram1_bss).
-static int32_t DMA_BUFFER_MEM_SECTION dma_rx[BLOCK_SIZE * 2]; // stereo interleaved: L, R, L, R...
-static int32_t DMA_BUFFER_MEM_SECTION dma_tx[BLOCK_SIZE * 2]; // dummy TX buffer (required by API)
+static int32_t DMA_BUFFER_MEM_SECTION
+    dma_rx[BLOCK_SIZE * 2]; // stereo interleaved: L, R, L, R...
+static int32_t DMA_BUFFER_MEM_SECTION
+    dma_tx[BLOCK_SIZE * 2]; // dummy TX buffer (required by API)
 
 // Ring buffer bridging the SAI2 (mic) and SAI1 (codec) clock domains.
-//two independently-clocked peripherals.
+// two independently-clocked peripherals. - thats fricked up!
 const unsigned RING_SIZE = 2048;
 static int16_t ring[RING_SIZE];
-static volatile unsigned write_idx = RING_SIZE / 2; // start ahead for latency headroom
-static volatile unsigned read_idx  = 0;
+static volatile unsigned write_idx =
+    RING_SIZE / 2; // start ahead for latency headroom
+static volatile unsigned read_idx = 0;
 
 // void(int32_t* rx, int32_t* tx, size_t size)
-void SAI2_Callback(int32_t* rx, int32_t* tx, size_t size) {
-  for(size_t i = 0; i < size / 2; i++) { // /2 because stereo interleaved
+void SAI2_Callback(int32_t *rx, int32_t *tx, size_t size) {
+  for (size_t i = 0; i < size / 2; i++) { // /2 because stereo interleaved
     // SPH0645: 18-bit data in standard I2S 32-bit frame (SAI_32BIT).
     // Bits [31:14] = 18-bit value (MSB first). Arithmetic >> 14 sign-extends.
     // Normalize by 2^17 = 131072 (18-bit signed full-scale).
     int32_t raw = rx[i * 2]; // left channel (SEL = GND)
-    float sample = (float)(raw >> 14) / 131072.0f;
-    sample = RemoveDC(sample);
+    float sample =
+        (float)(raw >> 14) / 131072.0f; // some sort of important conversion?
+    sample = RemoveDC(sample);          // cleanup?
 
-    float scaled = sample * 32767.0f;
-    if(scaled > 32767.0f) scaled = 32767.0f;
-    if(scaled < -32768.0f) scaled = -32768.0f;
+    float scaled = sample * 32767.0f; // scaled by cap of 16 bit integer - basic
+                                      // amplification amplitude wise
+    if (scaled > 32767.0f)            // scales it back to 16 bit integer
+      scaled = 32767.0f;
+    if (scaled < -32768.0f)
+      scaled = -32768.0f;
 
-    ring[write_idx % RING_SIZE] = (int16_t)scaled;
+    ring[write_idx % RING_SIZE] = (int16_t)scaled; // writes
     write_idx++;
   }
 }
 
-void PlaybackCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, size_t size) {
-  for(size_t i = 0; i < size; i++) {
+void PlaybackCallback(AudioHandle::InputBuffer in,
+                      AudioHandle::OutputBuffer out, size_t size) {
+  for (size_t i = 0; i < size; i++) {
     float sample = (float)ring[read_idx % RING_SIZE] / 32768.0f;
     read_idx++;
     out[0][i] = sample;
@@ -84,31 +92,37 @@ int main() {
   SaiHandle::Config sai_cfg;
   sai_cfg.periph = SaiHandle::Config::Peripheral::SAI_2;
   sai_cfg.sr = SaiHandle::Config::SampleRate::SAI_48KHZ;
-  sai_cfg.bit_depth = SaiHandle::Config::BitDepth::SAI_32BIT; // SAI_24BIT uses MSB-justified; SPH0645 needs standard I2S
+  sai_cfg.bit_depth =
+      SaiHandle::Config::BitDepth::SAI_32BIT; // SAI_24BIT uses MSB-justified;
+                                              // SPH0645 needs standard I2S
   // All active pins (PA0=SD_B, PA1=MCLK_B, PA2=SCK_B, PG9=FS_B) are Block_B.
   // Block_B must be MASTER so it drives BCLK and LRCL as outputs.
-  // Block_A is a dummy slave (required by libDaisy API; SA pin not connected to anything).
+  // Block_A is a dummy slave (required by libDaisy API; SA pin not connected to
+  // anything).
   sai_cfg.a_sync = SaiHandle::Config::Sync::SLAVE;
   sai_cfg.b_sync = SaiHandle::Config::Sync::MASTER;
   sai_cfg.a_dir = SaiHandle::Config::Direction::TRANSMIT;
   sai_cfg.b_dir = SaiHandle::Config::Direction::RECEIVE;
 
-  sai_cfg.pin_config.mclk = {DSY_GPIOA, 1};  // Pin 31
-  sai_cfg.pin_config.sb = {DSY_GPIOA, 0};  // Pin 32 - mic DOUT
-  sai_cfg.pin_config.sa = {DSY_GPIOD, 11}; // Pin 33 - dummy TX
-  sai_cfg.pin_config.fs = {DSY_GPIOG, 9};  // Pin 34
+  sai_cfg.pin_config.mclk = {DSY_GPIOA, 1}; // Pin 31
+  sai_cfg.pin_config.sb = {DSY_GPIOA, 0};   // Pin 32 - mic DOUT
+  sai_cfg.pin_config.sa = {DSY_GPIOD, 11};  // Pin 33 - dummy TX
+  sai_cfg.pin_config.fs = {DSY_GPIOG, 9};   // Pin 34
   sai_cfg.pin_config.sck = {DSY_GPIOA, 2};  // Pin 35
 
   SaiHandle::Result init_result = sai2.Init(sai_cfg);
-  if(init_result != SaiHandle::Result::OK) {
+  if (init_result != SaiHandle::Result::OK) {
     hw.PrintLine("ERROR: SAI init failed");
-    while(1) {}
+    while (1) {
+    }
   }
 
-  SaiHandle::Result dma_result = sai2.StartDma(dma_rx, dma_tx, BLOCK_SIZE * 2, SAI2_Callback);
-  if(dma_result != SaiHandle::Result::OK) {
+  SaiHandle::Result dma_result =
+      sai2.StartDma(dma_rx, dma_tx, BLOCK_SIZE * 2, SAI2_Callback);
+  if (dma_result != SaiHandle::Result::OK) {
     hw.PrintLine("ERROR: StartDma failed");
-    while(1) {}
+    while (1) {
+    }
   }
 
   // Start onboard codec (SAI1); drains the ring buffer through
@@ -118,5 +132,6 @@ int main() {
   hw.StartAudio(PlaybackCallback);
 
   hw.PrintLine("Live passthrough running...");
-  while(1) {}
+  while (1) {
+  }
 }
